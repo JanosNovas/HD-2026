@@ -1,0 +1,61 @@
+Tento nález identifikuje kritickou bezpečnostní zranitelnost týkající se autentizace a autorizace. Jde o učebnicový příklad nesprávného zpracování JWT (JSON Web Token), který může vést k úplné kompromitaci uživatelských účtů (včetně administrátorských).
+
+Popis problému
+Zranitelnost spočívá v kombinaci dvou zásadních chyb v souboru auth.py:
+
+Vypnuté ověření podpisu (verify_signature: False):
+Funkce jwt.decode s tímto parametrem ignoruje kryptografický podpis tokenu. To znamená, že aplikace přijme jakýkoliv token, který je formátován jako platný JSON (Header.Payload.Signature), i když podpis nesedí nebo chybí. Útočníkovi stačí vzít vlastní nebo expirovaný JWT, zakódovat do jeho payloadu (těla) Base64 libovolné oid (Object ID, např. ID administrátora) a poslat jej v cookie authorization. Aplikace tento falešný token bez ověření přečte, vyextrahuje podvržené oid a útočníka pod touto identitou přihlásí.
+
+Použití holého (bare) except bloku:
+Konstrukce except: zachytává naprosto všechny výjimky (včetně systémových jako KeyboardInterrupt nebo SystemExit). To je špatná praktika. Pokud nastane chyba, která nesouvisí s dekódováním tokenu, kód ji "spolkne", vypíše pouze obecnou hlášku a vrací None, což zásadně stěžuje ladění (debugging).
+
+Dopad
+Privilege Escalation / Account Takeover: Přímé riziko převzetí cizí identity. Útočník může odesílat požadavky jménem libovolného uživatele, pokud zná jeho oid.
+
+Obcházení expirace: Jelikož se neověřuje podpis, neprovádí knihovna ani automatickou validaci expiračních časů (exp), takže lze použít libovolně starý (a již zneplatněný) token.
+
+Navrhované řešení
+Je nutné tokeny validovat. K tomu je potřeba znát veřejný klíč (nebo symetrický secret), kterým byl token podepsán, a zkontrolovat jeho platnost. V případě Entra ID (dříve Azure AD) se běžně stahují veřejné klíče (JWKS) z endpointu Microsoftu.
+
+Oprava v auth.py (Základní koncept bez JWKS implementace):
+
+Python
+from fastapi import Request
+import jwt
+from jwt.exceptions import PyJWTError, ExpiredSignatureError
+
+# Upozornění: V produkci nesmí být SECRET_KEY hardcoded, 
+# a pro Entra ID (Azure AD) se musí použít JWKS klient, nikoliv statický secret.
+# Tento kód ukazuje pouze správný přístup k validaci.
+SECRET_KEY = "vas-tajny-klic" # Nebo načítání JWKS
+ALGORITHM = "HS256" # Nebo "RS256" pro asymetrické klíče z Entra ID
+
+def authorize_user(request: Request):
+    authorization_cookie = request.cookies.get("authorization")
+    user_id = None
+
+    if authorization_cookie:
+        try:
+            # ODSTRANĚNO: options={"verify_signature": False}
+            # PŘIDÁNO: secret/klíč a povolené algoritmy
+            decoded_token = jwt.decode(
+                authorization_cookie, 
+                SECRET_KEY, 
+                algorithms=[ALGORITHM],
+                # Pokud ověřujete aud (audience) nebo iss (issuer):
+                # audience="vase-client-id",
+                # issuer="https://login.microsoftonline.com/vas-tenant-id/v2.0"
+            )
+            user_id = decoded_token.get("oid")
+            
+        except ExpiredSignatureError:
+            print("Token vypršel.")
+        except PyJWTError as e:
+            # Zachytává specifické chyby spojené s JWT (špatný podpis, struktura atd.)
+            print(f"Chyba validace tokenu: {e}")
+        except Exception as e:
+             # Specifičtější catch-all pro ostatní neočekávané chyby, nikoliv holý except
+            print(f"Neočekávaná chyba při autorizaci: {e}")
+
+    return user_id
+Pro správnou integraci s Entra ID byste měli využít knihovny, které umí automaticky stahovat a kešovat veřejné klíče z .well-known/openid-configuration, např. integrací balíčku PyJWKClient.
