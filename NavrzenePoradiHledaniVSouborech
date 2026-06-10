@@ -1,0 +1,35 @@
+Při bezpečnostní analýze Kubernetes manifestů a konfiguračních souborů je nutné postupovat od souborů obsahujících citlivá data a externí přístupy směrem k interní konfiguraci. Zde je logické seřazení souborů ze snímku od nejkritičtějších po nejméně rizikové pro účely bezpečnostní prověrky.
+
+### 1. Konfigurace a tajemství (Kritická priorita)
+
+* **`common.env`**: Tento soubor představuje nejvyšší bezpečnostní riziko. Běžně obsahuje proměnné prostředí pro celou aplikaci. Pokud obsahuje citlivá data jako hesla (např. k databázi pro pgAdmin nebo jednotlivé GraphQL služby), API klíče nebo tokeny v prostém textu, jedná se o zásadní zranitelnost. V produkčním prostředí Kubernetes musí být citlivé údaje řešeny přes šifrované `Secrets`, nikoliv přes běžné `.env` soubory nebo standardní `ConfigMap`.
+
+### 2. Vstupní body a správa dat (Vysoká priorita)
+
+* **`k8s_extras/ingress-controller.yaml`**: Definuje pravidla pro přístup z vnější sítě (internetu) do clusteru. Časté chyby zahrnují chybějící TLS terminaci (komunikace bez šifrování), příliš benevolentní pravidla směrování, nebo nechtěné vystavení interních endpointů.
+* **`manifests/pgadmin-deployment.yaml`** a **`manifests/pgadmin-service.yaml`**: Jde o nástroj pro správu databáze. Pokud je konfigurace Service nebo Ingressu chybná a rozhraní pgAdmin je dostupné z internetu bez striktní autentizace a omezení na konkrétní IP adresy (whitelisting), znamená to přímé riziko kompromitace databáze.
+* **`manifests/apollo-deployment.yaml`**: Apollo Federation funguje jako API Gateway (brána). Vzhledem k tomu, že jde o centrální bod, přes který prochází požadavky na všechny ostatní služby, jeho zranitelnost nebo špatná konfigurace (např. chybějící limitace dotazů vedoucí k DoS) ohrožuje celou aplikaci.
+
+### 3. Konfigurace pracovních zátěží / Podů (Střední priorita)
+
+Tyto soubory definují parametry běhu samotných kontejnerů. U všech se analyzuje primárně `SecurityContext` a správa zdrojů.
+
+* **`manifests/frontend-deployment.yaml`**
+* **`manifests/gql-granting-deployment.yaml`**
+* **`manifests/gql-office-deployment.yaml`**
+* **`manifests/gql-projects-deployment.yaml`**
+* **`manifests/gql-ug-deployment.yaml`**
+* **`k8s_extras/prebuilt-initContainer.yaml`**
+* **Cíle analýzy v těchto souborech:** Běh kontejnerů s právy `root`, absence omezení hardwarových zdrojů (`resources.limits` a `resources.requests`, což umožňuje Resource Exhaustion/DoS), povolená eskalace privilegií (`allowPrivilegeEscalation: true`) nebo použití statických/neověřených image tagů (např. `:latest` místo konkrétního hashe).
+
+### 4. Interní síťování a škálování (Nízká priorita)
+
+* **`manifests/*-service.yaml`** (zbývající soubory): Řeší interní komunikaci uvnitř clusteru. Hledá se zde nechtěné nastavení typu na `NodePort` nebo `LoadBalancer` u služeb, které mají být pouze interní (typ `ClusterIP`).
+* **`manifests/*-hpa.yaml`**: Horizontal Pod Autoscaler. Přímý bezpečnostní dopad je minimální, nicméně špatné nastavení metrik může vést k neadekvátnímu škálování a finančním ztrátám (Denial of Wallet).
+
+### 5. Informační soubory (Architektura a kontext)
+
+* **`.gitignore`**: Může útočníkovi odhalit strukturu adresářů, jména záloh nebo skryté soubory vývojářů, ale technicky nejde o zranitelnost.
+* **`README.md`**: Obsahuje dokumentaci užitečnou pro pochopení logiky systému.
+
+Který z těchto souborů nebo okruhů chcete prostřednictvím sdílení zdrojového kódu analyzovat jako první?
