@@ -1,0 +1,45 @@
+Popis problému
+Hodnota initialDelaySeconds: 300 u readinessProbe (a totožně u livenessProbe) instruuje Kubernetes, aby vyčkal 5 minut od spuštění kontejneru, než vůbec poprvé zkontroluje jeho stav a zařadí jej do load balanceru.
+
+Důsledky v praxi:
+
+Znefunkčnění HPA (Auto-scalingu): Pokud se skokově zvýší zátěž a autoscaler vytvoří nové pody frontendu, tyto pody budou 5 minut nečinně stát a nepřijmou žádný provoz. Původní přetížené pody mohou mezitím havarovat.
+
+Zablokování nasazování (Rollout): Při aktualizaci verze (rolling update) bude Kubernetes čekat minimálně 5 minut na zařazení každého nového podu, což neúměrně prodlužuje dobu trvání nasazovacího procesu.
+
+Důvodem této konfigurace bývá historicky snaha zabránit nechtěným restartům (skrze livenessProbe) u aplikací, které pomalu startují.
+
+Navrhované řešení
+Pro aplikace s pomalým nebo nepředvídatelným startem Kubernetes definuje startupProbe. Ta dočasně deaktivuje liveness a readiness sondy, dokud aplikace poprvé úspěšně neodpoví. Jakmile startupProbe uspěje, převezmou kontrolu readinessProbe a livenessProbe s velmi krátkými intervaly pro okamžitou reakci.
+
+Oprava v frontend-deployment.yaml:
+
+YAML
+          # 1. Nová startupProbe pro pokrytí pomalého startu (max 300 s)
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8000
+            failureThreshold: 30
+            periodSeconds: 10 # 30 pokusů * 10s = max 300 sekund na start
+            
+          # 2. Úprava livenessProbe
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - curl -f -X GET http://localhost:8000/ || exit 1
+            failureThreshold: 3
+            initialDelaySeconds: 5 # Zkráceno z 300
+            periodSeconds: 60
+            timeoutSeconds: 10
+            
+          # 3. Úprava readinessProbe
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 5 # Zkráceno z 300
+            periodSeconds: 10
+Tímto zásahem kontejner nahlásí stav Ready okamžitě po svém reálném nastartování (např. už po 10 vteřinách) a HPA může efektivně plnit svou funkci.
