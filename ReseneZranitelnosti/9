@@ -1,0 +1,32 @@
+Popis problému
+Absence bloku resources.requests a resources.limits způsobuje v Kubernetes dva zásadní provozní problémy:
+
+Nefunkční automatické škálování (HPA):cc
+Horizontal Pod Autoscaler standardně počítá vytížení CPU jako procentuální poměr aktuální spotřeby vůči požadovaným zdrojům (requests). Pokud kontejner nemá definované requests, HPA nemá vůči čemu poměr počítat. Metrika vykáže stav unknown a ke škálování při zátěži nedojde. Systém se tak pod náporem požadavků zhroutí.
+
+QoS Class - BestEffort (Riziko okamžitého ukončení):
+Kubernetes rozřazuje pody do tří tříd kvality služeb (QoS): Guaranteed, Burstable a BestEffort. Pod bez definovaných requests i limits automaticky padá do třídy BestEffort. Pokud dojde na uzlu (Node) k nedostatku výpočetních prostředků (např. paměti), Kubelet začne prioritně ukončovat pody ve třídě BestEffort. Tyto GraphQL služby tak budou při jakékoliv zátěži clusteru první na řadě k vyřazení (eviction).
+
+Navrhované řešení
+Je nutné doplnit blok resources do sekce containers v každém *-deployment.yaml souboru (a ideálně i do initContainers, aby Kubernetes mohl správně alokovat prostředky při startu podu).
+
+Oprava v kódu (aplikovatelná na gql-ug, gql-office i další):
+
+YAML
+      containers:
+        - env:
+            # ... (zde jsou vaše stávající proměnné prostředí) ...
+          image: hrbolek/gql_ug:latest
+          name: gql-ug
+          # DOPLNĚNÝ BLOK RESOURCES:
+          resources:
+            requests:
+              cpu: "100m"      # Minimální garantované CPU (100 milicore)
+              memory: "128Mi"  # Minimální garantovaná RAM
+            limits:
+              cpu: "500m"      # Maximální povolené CPU
+              memory: "256Mi"  # Maximální povolená RAM (zabraňuje memory leaks shodit uzel)
+          ports:
+            - containerPort: 8000
+# ... zbytek manifestu ...
+Poznámka: Hodnoty 100m a 128Mi jsou orientační. Správné hodnoty je nutné stanovit na základě profilování konkrétních GraphQL služeb v běžném provozu.
