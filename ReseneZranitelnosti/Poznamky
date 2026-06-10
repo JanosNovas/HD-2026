@@ -1,1 +1,35 @@
+1. Autentizace a autorizace JWT (#16, #17)
+Co ověřit: Zda API v běhovém prostředí reálně akceptuje zmanipulované tokeny (ověření zneužitelnosti).
+Jak ověřit:
 
+#16 (Chybějící ověření podpisu): Zachyťte validní HTTP požadavek na API (např. přes Burp Suite nebo Postman). Vezměte JWT z cookie, vložte jej do nástroje jako jwt.io a upravte payload (např. změňte oid na ID administrátora). Smažte kryptografický podpis tokenu nebo změňte hlavičku na "alg": "none". Odeslat tento modifikovaný požadavek na server. Pokud server vrátí data místo HTTP 401 (Unauthorized), zranitelnost je plně zneužitelná.
+
+#17 (Chybějící ověření audience): Získejte platný Entra ID (Azure AD) token vydaný pro jinou aplikaci ve stejném tenantu. Pošlete jej v hlavičce na chráněný endpoint UOIS. Pokud je požadavek akceptován, chybí izolace služeb.
+
+2. Únik tajemství a repozitář (#7)
+Co ověřit: Rozsah kompromitace v historii Gitu a stav v produkčním clusteru.
+Jak ověřit:
+
+Historie repozitáře: Přečtení aktuálního kódu neřeší starší commity. Spusťte na složku repozitáře automatizovaný skener tajemství, jako je Gitleaks (gitleaks detect --source . -v) nebo TruffleHog.
+
+Běžící cluster: Vypište si aktuální stav v Kubernetes pro ověření, zda jsou data vystavena všem s přístupem ke čtení namespace: kubectl get configmap common-env -o yaml.
+
+3. Škálování a propustnost Kubernetes (#9, #10, #11)
+Co ověřit: Reálné chování clusteru pod zátěží a odezvu autoscalingu (HPA).
+Jak ověřit:
+
+Load testing: Použijte zátěžové nástroje jako k6, JMeter nebo hey. Vygenerujte umělý provoz na endpointy gql-* služeb.
+
+Při probíhajícím testu sledujte metriky:
+
+kubectl top pods (reálná spotřeba CPU/RAM).
+
+kubectl get hpa -w (zda se zvyšuje počet replik a zda metrika CPU ukazuje hodnoty, nikoliv stav unknown).
+
+Ověření výpadku (probes): Záměrně smažte běžící pod frontendu (kubectl delete pod <jmeno-podu>). Změřte reálný čas, za který aplikace začne odpovídat uživatelům v prohlížeči, pro potvrzení blokačního zpoždění 300 sekund.
+
+4. Terraform syntaktická kontrola (#5a, #5b)
+Co ověřit: Schopnost Terraformu vytvořit plán bez havárií na verzích providerů.
+Jak ověřit:
+
+Spusťte lokálně (nebo v CI/CD pipeline) příkazy terraform init a následně terraform plan. Tím se ověří aktuální syntaxe proti staženým verzím providerů zapsaných v terraform.lock.hcl. Pokud konfigurace obsahuje chyby popsané v nálezech, proces plan selže na konkrétních řádcích kódu.
