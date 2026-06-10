@@ -1,0 +1,56 @@
+Tento nález je platný. Nejedná se o přímou bezpečnostní zranitelnost, ale o sadu provozních chyb v dokumentaci. Pokud se uživatel bude řídit přesně těmito pokyny, proces nasazení i správy selže.
+
+### Popis problémů
+
+V textu README se nachází čtyři hlavní nesoulady bránící úspěšné exekuci:
+
+1. **Absolutní cesty v příkazech (`cd /Terraform`)**
+Znak lomítka na začátku cesty (`/`) odkazuje na kořenový adresář operačního systému (např. `C:\Terraform` ve Windows nebo `/Terraform` v Linuxu), nikoliv na složku uvnitř repozitáře. Příkaz vyvolá chybu nenalezení cesty.
+2. **Case-sensitivity u složky Kubernetes**
+V sekci 5 dokumentace odkazuje na soubor `/UOIS/Kubernetes/common.env` (velké K), ale následně používá příkaz `cd UOIS/kubernetes` (malé k). Operační systémy na bázi Linuxu (Ubuntu/Debian, viz sekce 2 v README) striktně rozlišují velikost písmen. Zkopírování prvního tvaru povede k chybě.
+3. **Nesprávný namespace Ingress controlleru**
+V sekcích 6 a 9 je uveden příkaz pro získání IP adresy: `kubectl get service ingress-nginx-controller -n ingress-nginx`. Z dřívější analýzy souboru `main.tf` vyplývá, že Terraform instaluje tento Helm chart do jmenného prostoru `ingress-basic`. Příkaz v dokumentaci vrátí chybovou hlášku, že služba v daném namespace neexistuje, a uživatel nezíská IP adresu nutnou pro přístup k aplikaci.
+4. **Syntaxe Terraform příkazu**
+V sekci 8 je pro smazání prostředků použit příkaz `terraform apply -destroy`. Přestože je tento příkaz technicky platný (Terraform jej interně interpretuje), je matoucí a nestandardní. Oficiální a doporučovaná syntaxe je `terraform destroy`.
+
+### Dopad
+
+Nemožnost nasadit infrastrukturu přesně podle návodu. Začínající uživatelé, pro které je návod primárně určen, uvíznou na chybách týkajících se nenalezených cest a neexistujících služeb.
+
+### Navrhovaná řešení
+
+Je nutné přepsat chybné bloky kódu v souboru `README.md`.
+
+**Oprava v sekci 3:**
+
+```bash
+cd Terraform       # Odstraněno počáteční lomítko
+terraform init
+terraform plan
+terraform apply
+
+```
+
+**Oprava v sekci 5:**
+
+```text
+Úpravu provádíme v souboru UOIS/kubernetes/common.env a pak aplikujeme na cluster:
+cd UOIS/kubernetes
+
+```
+
+**Oprava v sekci 6 a 9:**
+
+```bash
+# Zjištění veřejné IP adresy aplikace
+kubectl get service ingress-nginx-controller -n ingress-basic
+
+```
+
+**Oprava v sekci 8:**
+
+```bash
+cd Terraform       # Změněno na relativní cestu
+terraform destroy  # Použit standardní příkaz
+
+```
