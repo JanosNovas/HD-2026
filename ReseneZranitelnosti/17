@@ -1,0 +1,61 @@
+Tento nález je platný a představuje **střední až vysoké bezpečnostní riziko**. Vypnutí ověřování "Audience" (Publikum) při validaci JWT je koncepční chyba, která porušuje princip nejmenšího privilegia (Principle of Least Privilege).
+
+### Popis problému
+
+Ve třídě `EntraIDClient` uvnitř souboru `core.py` dochází k validaci tokenu pomocí knihovny `jose` (`jwt.decode`). Kód správně stahuje veřejné klíče a ověřuje kryptografický podpis i vydavatele (Issuer).
+
+Nicméně, v parametru `options` funkce `jwt.decode` (řádky 109-112) je záměrně vypnuto ověřování audience:
+
+```python
+        try:
+            claims = jwt.decode(
+                token,
+                key_obj,
+                algorithms=[unverified_header.get("alg", "RS256")],
+                # audience=self.audience,  <-- Zakomentováno
+                issuer=self.issuer,
+                options={
+                    "verify_signature": True,
+                    # "verify_aud": self.audience is not None, <-- Zakomentováno
+                    "verify_aud": False,                       <-- Explicitně vypnuto
+                    # ...
+                },
+
+```
+
+**Co je to Audience (aud)?**
+Claim `aud` v JWT definuje zamýšleného příjemce tokenu (typicky Client ID konkrétní aplikace). Entra ID vydává tokeny pro konkrétní zdroje.
+
+**Důsledek vypnutí:**
+Pokud je `verify_aud` nastaveno na `False`, aplikace přijme *jakýkoliv* platný token podepsaný správným tenantem v Entra ID, bez ohledu na to, pro koho byl vydán.
+Útočník by mohl získat platný token pro zcela jinou aplikaci v rámci stejné organizace (např. vnitřní HR systém nebo kalendář) a použít ho k autentizaci proti této aplikaci (UOIS). Aplikace by token akceptovala, protože podpis a issuer souhlasí. Tímto se otevírá prostor pro *Cross-Service Confusion* (záměnu služeb).
+
+### Navrhované řešení
+
+Je nezbytné ověřování audience zapnout a striktně kontrolovat, zda byl token vydán pro tuto konkrétní aplikaci.
+
+**Oprava v `core.py`:**
+
+```python
+        try:
+            claims = jwt.decode(
+                token,
+                key_obj,
+                algorithms=[unverified_header.get("alg", "RS256")],
+                audience=self.audience, # Odkomentováno: Předání povolené audience
+                issuer=self.issuer,
+                options={
+                    "verify_signature": True,
+                    "verify_aud": True,     # Změněno: Zapnutí ověřování
+                    "verify_iss": True,
+                    "verify_exp": True,
+                    "verify_nbf": True,
+                    "verify_at_hash": False,
+                },
+                # leeway=self.leeway, # Lze odkomentovat, pokud je definováno na úrovni třídy
+            )
+
+```
+
+**Důležité upozornění pro konfiguraci:**
+Při inicializaci třídy `EntraIDClient` musí být parametr `audience` správně vyplněn (typicky se jedná o *Application (client) ID* zaregistrované v Entra ID pro tuto konkrétní API/službu). Pokud by `self.audience` zůstalo prázdné nebo `None`, zapnuté ověřování by mohlo začít selhávat i pro validní tokeny.
