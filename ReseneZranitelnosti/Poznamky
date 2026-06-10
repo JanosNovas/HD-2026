@@ -1,4 +1,4 @@
-1. Autentizace a autorizace JWT (#16, #17)
+1. Autentizace a autorizace JWT (#16, #17)     JE POTŘEBA TESTOVAT NA ORIGO ŠTEFKOVO GITHUBU
 Co ověřit: Zda API v běhovém prostředí reálně akceptuje zmanipulované tokeny (ověření zneužitelnosti).
 Jak ověřit:
 
