@@ -1,0 +1,37 @@
+Popis problému
+Příčina spočívá v nekompatibilitě mezi vynucenou verzí poskytovatele (provideru) a způsobem, jakým je v kódu přistupováno k jeho výstupům.
+
+Definice provideru: V souboru providers.tf je verze azapi omezena na ~>1.5 (tedy povoluje verze 1.5.x, ale nepovolí 2.0+).
+
+Chování ve verzi 1.x: Atribut output zdroje azapi_resource_action vrací data typu string (textový řetězec ve formátu JSON). K získání konkrétního klíče je nutné použít funkci jsondecode().
+
+Chyba v kódu: V souboru ssh.tf kód přistupuje k atributu přímo přes tečkovou notaci (.output.publicKey). Toto je nová syntaxe platná až pro azapi verze 2.0 a vyšší, kde se output vrací jako typ dynamic/object.
+
+Ve stávajícím stavu Terraform ohlásí chybu typu Unsupported attribute, protože nelze použít tečkovou notaci k extrakci hodnoty z obyčejného řetězce.
+
+Navrhovaná řešení
+K odstranění chyby je nutné sjednotit verzi provideru se syntaxí. Na výběr jsou dvě varianty.
+
+Varianta A: Upgrade azapi provideru na verzi 2.x (Doporučeno)
+Ponecháte čistší a novější zápis v souboru ssh.tf a upravíte povolenou verzi v providers.tf.
+
+Změna v providers.tf:
+
+Terraform
+    azapi = {
+      source  = "azure/azapi"
+      version = "~> 2.0" 
+    }
+Poznámka: Podle snímku se stejný problém s tečkovou notací vyskytuje i v souboru main.tf na řádku 109. Upgrade provideru vyřeší obě místa současně.
+
+Varianta B: Návrat k syntaxi verze 1.x
+Pokud firemní standardy vyžadují setrvání na starší verzi azapi (z důvodu jiných závislostí), musíte zachovat konfiguraci v providers.tf a upravit volání ve zdrojových kódech.
+
+Změna v ssh.tf:
+
+Terraform
+output "key_data" {
+  # Textový výstup se nejprve musí dekódovat z JSONu do objektu
+  value = jsondecode(azapi_resource_action.ssh_public_key_gen.output).publicKey
+}
+Totožnou úpravu s jsondecode(...) bude nutné provést i v souboru main.tf u parametru key_data uvnitř bloku linux_profile.
