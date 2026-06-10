@@ -1,0 +1,61 @@
+Popis problému
+Z předložených souborů vyplývají dvě hlavní roviny tohoto problému:
+
+Vystavení v common.env (a následně v Kubernetes ConfigMap):
+Soubor common.env obsahuje kritické přístupové údaje jako POSTGRES_PASSWORD, SALT (kryptografická sůl) a ADMIN_DEFAULT_PASSWORD. Tento soubor je následně v main.tf nahráván do Kubernetes jako ConfigMap (kubernetes_config_map_v1). ConfigMapy nejsou určeny pro ukládání hesel; jejich obsah není ve výchozím stavu šifrován a kdokoli s přístupem ke čtení ConfigMap v daném jmenném prostoru (namespace) získá tato hesla v čitelné podobě. Navíc, soubor .env by nikdy neměl být součástí verzovacího systému (Git).
+
+Hardcoded hesla v manifestech (pgadmin-deployment.yaml):
+V definičním souboru deploymentu pro pgAdmin je administrátorské heslo definováno přímo vložením hodnoty:
+
+YAML
+- name: PGADMIN_DEFAULT_PASSWORD
+  value: example
+To znamená, že kdokoli s přístupem ke zdrojovému kódu infrastruktury má automaticky kompromitován administrátorský přístup k databázovému nástroji.
+
+Dopad
+Kompromitace databáze: Útočník nebo neoprávněný vývojář s přístupem ke zdrojovému kódu, Terraform state souboru nebo Kubernetes clusteru získá heslo postgres uživatele.
+
+Neexistující rotace hesel: Hesla zapsaná natvrdo v kódu se obtížně mění (rotují). Při každé změně je nutný zásah do kódu a opětovné nasazení.
+
+Únik kryptografického materiálu: Odhalení SALT hodnoty usnadňuje dešifrování nebo crackování hesel/tokenů v samotné aplikaci.
+
+Navrhovaná řešení
+Abychom tento problém odstranili, je nutné přesunout veškerá tajemství do nativních Kubernetes Secrets a odstranit je ze zdrojového kódu.
+
+Krok 1: Vytvoření Kubernetes Secret
+Místo ConfigMapy pro citlivé údaje vytvořte Secret. Pro testovací účely nebo lokální nasazení lze použít definici Secretu, pro produkci by měly být hodnoty injektovány např. přes Azure Key Vault, HashiCorp Vault nebo alespoň deklarovány v .gitignore souboru a vytvářeny ručně.
+
+Příklad definice uois-secrets.yaml (v produkci neukládat do Gitu!):
+
+YAML
+apiVersion: v1
+kind: Secret
+metadata:
+  name: uois-secrets
+type: Opaque
+stringData: # stringData automaticky zakóduje do Base64
+  POSTGRES_PASSWORD: "example_secure_password"
+  SALT: "fe1c71b2-74c0-41e5-978f-eecbffac7418"
+  ADMIN_DEFAULT_PASSWORD: "secure_admin_password"
+  PGADMIN_DEFAULT_PASSWORD: "secure_pgadmin_password"
+Krok 2: Úprava manifestů pro použití Secretu
+Upravte manifesty tak, aby proměnné prostředí nečetly hodnoty napřímo, ale tahaly je z vytvořeného Secretu.
+
+Úprava v pgadmin-deployment.yaml:
+Změňte blok env z value na valueFrom.secretKeyRef:
+
+YAML
+        - env:
+            - name: PGADMIN_DEFAULT_EMAIL
+              value: anoyne@anywhere.com
+            - name: PGADMIN_DEFAULT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: uois-secrets
+                  key: PGADMIN_DEFAULT_PASSWORD
+Stejný postup uplatněte pro kontejnery, které potřebují přistupovat k databázi (např. GraphQL služby) nebo využívají sůl, tím, že je odkážete na klíče POSTGRES_PASSWORD nebo SALT v Secretu uois-secrets.
+
+Krok 3: Vyčištění infrastruktury (Terraform)
+Odstranění z common.env: Odstraňte citlivé klíče z common.env. V ConfigMapě ponechte pouze necitlivé konfigurační parametry (např. POSTGRES_HOST, DEMODATA).
+
+Rotace: Jelikož hesla byla nahrána do Gitu, považují se za kompromitovaná. Je nutné vygenerovat nová hesla a novou SALT.
