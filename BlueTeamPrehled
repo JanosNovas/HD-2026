@@ -1,3 +1,5 @@
+https://github.com/TadPal/HD_2026_Azure/tree/main
+
 Návod na nasazení architektury UOIS v prostředí Azure (AKS)
 Tento návod je určen pro seznámení s technologiemi Kubernetes a Azure. Cílem je nasadit komplexní mikroslužbovou architekturu projektu UOIS pomocí nástroje Terraform pro infrastrukturu a kubectl pro správu clusteru.
 1. Co budeme nasazovat?
