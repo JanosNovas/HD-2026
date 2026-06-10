@@ -1,0 +1,69 @@
+Popis problému
+Konflikt vzniká kvůli nesouladu definic v souborech providers.tf a main.tf:
+
+Povolená verze provideru: V providers.tf máte definováno version = ">= 2.1.0" pro Helm provider. Terraform tedy může stáhnout verzi z řady 2.x.
+
+Použitá syntaxe v3: Kód v main.tf (a částečně i v providers.tf) je napsán syntaxí, která odpovídá Helm provideru verze 3 (nebo specifickým změnám na pomezí major verzí), kde se z dřívějších HCL bloků staly atributy očekávající kolekce (list/map).
+
+Konkrétní kolize v kódu:
+
+V souboru main.tf (helm_release.ingress_nginx):
+Používáte zápis atributu s polem (list of objects): set = [{ name = "...", value = "..." }].
+Při stažení Helm provideru verze 2 Terraform očekává blokový zápis a na tento kód vyhodí chybu, protože set neidentifikuje jako atribut.
+
+V souboru providers.tf (provider "helm"):
+Používáte zápis atributu s objektem: kubernetes = { host = ... }.
+Ve verzi 2 to byl blok a Terraform vyhodí chybu zmíněnou na snímku: „Blocks of type kubernetes are not expected here.“
+
+Dopad
+Nemožnost nasadit infrastrukturu. Pipeline nebo lokální spuštění Terraformu okamžitě havaruje na syntaktické/typové chybě při inicializaci nebo plánování, což zablokuje nasazení Ingress controlleru a všech závislých manifestů.
+
+Navrhovaná řešení
+Máte dvě možnosti, jak tento problém odstranit. Doporučuji první variantu, která systém posouvá k novějším standardům.
+
+Varianta A: Upgrade a vynucení Helm provideru v3 (Doporučeno)
+Ponechte aktuální syntaxi v main.tf a providers.tf, ale vynuťte stažení Helm provideru verze 3. To zabrání Terraformu stáhnout nekompatibilní starou verzi.
+
+Úprava v providers.tf:
+
+Terraform
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.10" # Nebo "~> 3.0" v závislosti na aktuálně dostupných stabilních verzích, případně ">= 2.10.0" pokud je v3 plně podporována vaším prostředím
+    }
+Poznámka: Přesná verze závisí na vydáních HashiCorp. Pokud v3 ještě není plně dostupná pro váš stack, použijte Variantu B. Pokud se jedná o specifikum pozdních verzí v2 (např. v2.10+), omezte spodek verze tak, aby nepovolil v2.1.0.
+
+Varianta B: Návrat ke kompatibilní syntaxi Helm v2
+Pokud musíte zachovat kompatibilitu s verzemi 2.x (např. >= 2.1.0), je nutné přepsat syntaxi z atributů na bloky.
+
+Úprava v main.tf (změna set):
+
+Terraform
+resource "helm_release" "ingress_nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  namespace        = "ingress-basic"
+  create_namespace = true
+
+  depends_on = [azurerm_kubernetes_cluster.k8s]
+
+  # Zápis jako blok
+  set {
+    name  = "controller.service.annotations.service\\.beta\\.kubernetes\\.io/azure-load-balancer-health-probe-request-path"
+    value = "/healthz"
+  }
+}
+Úprava v providers.tf (změna kubernetes):
+
+Terraform
+provider "helm" {
+  debug = true
+  # Zápis jako blok, nikoliv jako objekt s "="
+  kubernetes {
+    host                   = azurerm_kubernetes_cluster.k8s.kube_config[0].host
+    client_certificate     = base64decode(azurerm_kubernetes_cluster.k8s.kube_config[0].client_certificate)
+    client_key             = base64decode(azurerm_kubernetes_cluster.k8s.kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.k8s.kube_config[0].cluster_ca_certificate)
+  }
+}
