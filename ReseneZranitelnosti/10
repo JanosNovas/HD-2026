@@ -1,0 +1,47 @@
+Popis problému
+Jak ukazuje snímek a jak bylo potvrzeno v předchozích krocích, architektura UOIS má nasazené mikroslužby (Frontend, Apollo bránu a čtyři backendové gql-* služby).
+
+Dokumentace (README) slibuje automatické škálování celého systému (HPA). Nicméně reálný stav v adresáři manifests/ ukazuje, že manifesty pro Horizontal Pod Autoscaler (*-hpa.yaml) existují pouze pro dvě služby:
+
+apollo-hpa.yaml
+
+frontend-hpa.yaml
+
+Pro klíčové backendové služby (gql-ug, gql-office, gql-granting, gql-projects), které reálně vykonávají logiku a databázové dotazy, žádné HPA manifesty neexistují.
+
+Tento stav vytváří úzké hrdlo (bottleneck). Pokud se zvýší provoz, Frontend a Apollo se sice automaticky rozšíří na více instancí (podů), ale všechny tyto nové instance budou směrovat své požadavky na jedinou existující instanci každé gql-* služby. Tyto backendové služby budou rychle přetíženy a systém jako celek selže.
+
+Poznámka: Jak bylo zjištěno v nálezu #9, i kdyby HPA manifesty pro gql-* služby existovaly, nefungovaly by, protože těmto službám chybí definice resources.requests.
+
+Navrhovaná řešení
+Řešení tohoto problému vyžaduje dvoufázový přístup (kroky na sebe navazují).
+
+Krok 1: Doplnění resources.requests (Předpoklad)
+Nejprve musíte aplikovat řešení z předchozího nálezu (#9). Každá služba gql-* musí mít ve svém deployment manifestu (např. gql-ug-deployment.yaml) definované limity a požadavky na prostředky (CPU/Memory). Bez toho HPA nemůže počítat metriky.
+
+Krok 2: Vytvoření HPA manifestů pro backendové služby
+Pro každou ze čtyř GraphQL služeb vytvořte odpovídající HPA manifest.
+
+Zde je příklad souboru gql-ug-hpa.yaml (stejnou šablonu, pouze s úpravou jména, použijte pro office, granting a projects):
+
+YAML
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gql-ug-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gql-ug # Musí přesně odpovídat jménu v deployment.yaml
+  minReplicas: 1   # Minimální počet běžících podů
+  maxReplicas: 5   # Maximální počet podů při vysoké zátěži
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70 # Škáluje, když průměrné využití CPU přesáhne 70 %
+Po vytvoření těchto čtyř nových souborů (např. gql-office-hpa.yaml, atd.) ve složce manifests/ zajistíte, že celý systém od Frontendu přes Apollo bránu až po samotné mikroslužby bude škálovat symetricky a podle reálné zátěže.
