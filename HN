@@ -1,0 +1,95 @@
+Red Team operace – AKS
+Skupina 3: Assumed Breach – vnitřní síť a Pod Security
+Kontext práce
+Původní zadání skupiny předpokládalo scénář Assumed Breach, tedy situaci, kdy útočník již získal přístup do kompromitovaného kontejneru uvnitř AKS clusteru. Cílem bylo ověřit možnosti eskalace privilegií, laterálního pohybu, zneužití Service Account tokenů, přístupu k Azure Instance Metadata Service a identifikace slabých konfigurací podů.
+V rámci reálného průběhu ale nebyly k dispozici žádné přímé přístupy do prostředí. Nebyl poskytnut kubeconfig, přístup k běžícím podům ani konkrétní vstupní bod do aplikace. Práci jsme proto pojali jako black-box metodickou analýzu, tedy návrh toho, co by bylo v daném čase realistické otestovat, jakými nástroji a jaké výsledky by se daly očekávat.
+Zaměřili jsme se na tři oblasti, které jsou podle zadání nejrealističtější a zároveň bezpečnostně významné:
+1.	spuštění shellu v kontejneru,
+2.	mapování vnitřní sítě clusteru,
+3.	přístup k Azure Instance Metadata Service.
+________________________________________
+1. Spuštění shellu uvnitř kontejneru
+Co jsme chtěli ověřit
+První test by ověřoval, zda je možné získat interaktivní shell uvnitř běžícího kontejneru. V reálném útoku by šlo o typický první krok po kompromitaci aplikace. Útočník by se snažil zjistit, jaký uživatel v kontejneru běží, jaké má oprávnění, jaké soubory jsou dostupné, zda jsou připojené Service Account tokeny a zda kontejner obsahuje nástroje využitelné pro další průzkum.
+Čím by se testovalo
+Použitelné nástroje by byly především:
+•	kubectl exec, pokud by byl dostupný přístup do clusteru,
+•	/bin/bash nebo /bin/sh,
+•	případně Python PTY shell,
+•	základní systémové příkazy jako id, env, mount, ls, cat.
+Příklad zamýšleného postupu:
+kubectl exec -it <pod-name> -n <namespace> -- /bin/bash
+nebo při absenci bashe:
+kubectl exec -it <pod-name> -n <namespace> -- /bin/sh
+Očekávaný výsledek
+Pokud by se shell podařilo spustit, šlo by o důležitý indikátor kompromitace. V běžném produkčním kontejneru by interaktivní shell často neměl být vůbec potřeba. Z pohledu Blue Teamu by taková aktivita měla být dobře detekovatelná například pomocí Microsoft Defender for Containers nebo Falco pravidel.
+Výsledkem testu by tedy nebylo pouze ověření samotného shellu, ale také zjištění, zda bezpečnostní monitoring na takovou aktivitu reaguje.
+Dopad
+Úspěšné spuštění shellu by umožnilo další průzkum prostředí, hledání citlivých souborů, proměnných prostředí, tokenů a síťových spojení. Samo o sobě nejde o finální kompromitaci clusteru, ale o důležitý krok k laterálnímu pohybu.
+________________________________________
+2. Mapování vnitřní sítě clusteru
+Co jsme chtěli ověřit
+Druhý test by se zaměřoval na komunikaci uvnitř clusteru. Cílem by bylo zjistit, zda kompromitovaný pod může komunikovat s dalšími službami, jmennými prostory nebo systémovými komponentami Kubernetes.
+Tím by se ověřovalo hlavně to, zda jsou správně nastavené Network Policies. Pokud nejsou, může jeden kompromitovaný pod často komunikovat s velkou částí clusteru.
+Čím by se testovalo
+Použitelné nástroje:
+•	nmap,
+•	netcat,
+•	curl,
+•	jednoduchý bash loop,
+•	DNS dotazy na interní Kubernetes služby.
+Příklady testovaných cílů:
+curl -k https://10.0.0.1:6443/version
+nc -zv <ip-adresa> 80
+nc -zv <ip-adresa> 443
+nc -zv <ip-adresa> 10250
+nebo jednodušší průzkum pomocí curl:
+for i in $(seq 1 254); do
+  curl -s --connect-timeout 1 http://10.0.1.$i:8080 && echo "Open: 10.0.1.$i"
+done
+Očekávaný výsledek
+V dobře zabezpečeném clusteru by měl být pohyb mezi jmennými prostory omezený. Pod by neměl mít možnost volně komunikovat se všemi ostatními službami. Zvlášť citlivé jsou pokusy o přístup ke Kubernetes API, kubelet API nebo interním databázím.
+Pokud by síťová komunikace nebyla omezena, jednalo by se o slabinu v segmentaci clusteru. Útočník by po kompromitaci jednoho podu mohl hledat další cíle a rozšiřovat svůj přístup.
+Dopad
+Chybějící nebo špatně nastavené Network Policies mohou výrazně zvýšit dopad kompromitace jedné aplikace. Místo izolovaného incidentu může dojít k laterálnímu pohybu napříč clusterem.
+________________________________________
+3. Přístup k Azure Instance Metadata Service
+Co jsme chtěli ověřit
+Třetí test by ověřoval, zda se lze z podu dostat k Azure Instance Metadata Service na adrese:
+169.254.169.254
+Tento endpoint může poskytovat metadata o Azure prostředí a v některých případech také přístupové tokeny pro Managed Identity. Pokud by pod mohl získat token identity přiřazené node poolu, mohlo by dojít k přechodu z kompromitovaného kontejneru do Azure control plane.
+Čím by se testovalo
+Základní test dostupnosti metadata služby:
+curl -H "Metadata: true" \
+"http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+Test získání tokenu Managed Identity:
+curl -H "Metadata: true" \
+"http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"
+Očekávaný výsledek
+Pokud by metadata služba byla z podu dostupná, bylo by možné zjistit informace o Azure prostředí. Pokud by navíc byla na node poolu přiřazena Managed Identity s vyššími oprávněními, mohl by útočník získat OAuth token a použít ho k dalším akcím v Azure.
+V ideálním případě by přístup k IMDS z běžných aplikačních podů měl být omezen. Modernější a bezpečnější přístup je využití Workload Identity, kdy aplikace dostává pouze konkrétní oprávnění, která potřebuje.
+Dopad
+Úspěšné získání tokenu z IMDS by představovalo velmi závažné zjištění. Znamenalo by to možnost eskalace z úrovně kontejneru na úroveň Azure identity. Skutečný dopad by závisel na tom, jaká oprávnění má daná Managed Identity přiřazená.
+________________________________________
+Shrnutí výsledků
+Kvůli absenci přístupů do reálného AKS prostředí nebylo možné provést praktické ověření. Nebyl dostupný kubeconfig, konkrétní pod, namespace ani kompromitovaný vstupní bod. Výstup je proto zpracován jako black-box metodika a návrh realistických testů.
+Za nejdůležitější oblasti považujeme:
+Oblast	Význam	Očekávané riziko
+Shell v kontejneru	Umožňuje průzkum po kompromitaci aplikace	Střední až vysoké
+Interní síťový průzkum	Ověřuje izolaci mezi službami a namespaces	Vysoké při absenci Network Policies
+Přístup k IMDS	Může vést k získání Azure tokenu	Kritické při špatné konfiguraci Managed Identity
+Hlavní závěr je, že u AKS clusteru je zásadní neřešit pouze bezpečnost aplikace na vstupu, ale i dopad situace, kdy už je jeden kontejner kompromitovaný. Důležité je hlavně omezení oprávnění podů, správné nastavení Service Accountů, zavedení Network Policies a blokace přístupu k Azure Instance Metadata Service tam, kde není potřeba.
+________________________________________
+Doporučení
+1.	Omezit spouštění privilegovaných kontejnerů a vynucovat bezpečný securityContext.
+2.	Nepřipojovat Service Account tokeny do podů, které je nepotřebují.
+3.	Zavést Network Policies mezi namespaces.
+4.	Omezit přístup k Azure Instance Metadata Service z běžných aplikačních podů.
+5.	Používat Workload Identity místo široce oprávněné node Managed Identity.
+6.	Monitorovat neobvyklé procesy v kontejnerech, zejména spuštění shellu.
+7.	Pravidelně kontrolovat proměnné prostředí, volumes a konfigurace kvůli úniku secretů.
+________________________________________
+Závěr
+Práce ukazuje, jak by se v rámci Red Team scénáře postupovalo po kompromitaci jednoho kontejneru v AKS clusteru. I bez přímého přístupu do prostředí bylo možné určit realistické testovací kroky a popsat jejich bezpečnostní význam.
+Nejzávažnější oblastí je přístup k Azure Instance Metadata Service, protože může umožnit přechod z kontejneru do Azure prostředí. Druhou zásadní oblastí je chybějící síťová izolace, která by útočníkovi umožnila laterální pohyb uvnitř clusteru. Třetím důležitým bodem je detekce shellu v kontejneru, protože ta může signalizovat aktivní kompromitaci aplikace.
+
