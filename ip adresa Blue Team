@@ -1,0 +1,10 @@
+C:\Windows\System32\drivers\etc\hosts
+
+přidat tam : 
+
+4.223.148.110    uois
+
+
+ping uois    by měl fungovat v cmd
+
+https://uois
