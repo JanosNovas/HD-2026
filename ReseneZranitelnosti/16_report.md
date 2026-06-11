@@ -27,14 +27,14 @@ decoded_token = jwt.decode(
     authorization_cookie,
     options={"verify_signature": False}   # ← ověření podpisu je vypnuto
 )
-user_id = decoded_token.get("user_id")
+oid = decoded_token.get("oid")
 ```
 
 Nastavením `verify_signature: False` je knihovně PyJWT sděleno, aby přeskočila veškerou kryptografickou validaci tokenu. V důsledku toho:
 
 - Server přijímá tokeny s **jakýmkoliv podpisem**, včetně vymyšlených nebo prázdných.
 - Server **nevynucuje platnost tokenu** (pole `exp`), protože ověření expirace je součástí procesu validace podpisu.
-- Jakákoliv identita uživatele uložená v poli `user_id` v těle tokenu je **přijata bez podmínek**.
+- Jakákoliv identita uživatele uložená v poli `oid` v těle tokenu je **přijata bez podmínek**.
 
 Sekundárním problémem je prázdný blok `except:`, který tiše zachytí všechny výjimky — včetně `SystemExit` a `KeyboardInterrupt` — čímž se chyby autentizace stávají neviditelné při ladění i reakci na incidenty.
 
@@ -49,7 +49,7 @@ except:                          # ← zachytí vše včetně systémových výj
 
 ### 3.1 Skript pro vytvoření falešného tokenu
 
-Následující skript (`hd_16_exploit_script.py`) demonstruje, že je možné sestavit strukturálně platný JWT s libovolným `user_id` (zde: účet cílového administrátora) a zcela vymyšleným podpisem:
+Následující skript (`hd_16_exploit_script.py`) demonstruje, že je možné sestavit strukturálně platný JWT s libovolným `oid` (zde: účet cílového administrátora) a zcela vymyšleným podpisem:
 
 ```python
 import base64, json
@@ -60,7 +60,7 @@ def b64url(data):
 
 header  = b64url(json.dumps({"alg":"HS256","typ":"JWT"}, separators=(',',':')))
 payload = b64url(json.dumps({
-    "user_id": "51d101a0-81f1-44ca-8366-6cf51432e8d6",
+    "oid": "51d101a0-81f1-44ca-8366-6cf51432e8d6",
     "name": "Test",
     "roles": ["administrátor"],
     "exp": 9999999999
@@ -91,12 +91,12 @@ Server provádějící správnou validaci JWT by na token s neplatným podpisem 
 
 ## 4. Scénář útoku (konceptuální popis)
 
-Útočník znající `user_id` cílového uživatele (získatelné například z odpovědí API, chybových hlášení nebo enumerace) může provést úplné převzetí účtu následujícím způsobem:
+Útočník znající `oid` cílového uživatele (získatelné například z odpovědí API, chybových hlášení nebo enumerace) může provést úplné převzetí účtu následujícím způsobem:
 
-1. **Získání cílového OID** — zjistit `user_id` privilegovaného účtu prostřednictvím libovolného úniku informací.
-2. **Vytvoření falešného JWT** — sestavit token s cílovým `user_id` a libovolnou hodnotou pole `roles`. Tajný klíč není potřeba; server přijme jakýkoliv řetězec jako podpis.
+1. **Získání cílového OID** — zjistit `oid` privilegovaného účtu prostřednictvím libovolného úniku informací.
+2. **Vytvoření falešného JWT** — sestavit token s cílovým `oid` a libovolnou hodnotou pole `roles`. Tajný klíč není potřeba; server přijme jakýkoliv řetězec jako podpis.
 3. **Odeslání falešného tokenu** — nastavit vymyšlený JWT jako cookie `authorization` v HTTP požadavku na aplikaci.
-4. **Získání přístupu** — server načte `user_id` z těla tokenu bez ověření a útočníka přihlásí jako cílového uživatele.
+4. **Získání přístupu** — server načte `oid` z těla tokenu bez ověření a útočníka přihlásí jako cílového uživatele.
 
 Protože není ověřována ani expirace, jsou stejnou měrou přijímány dříve zachycené tokeny i tokeny s libovolně nastaveným datem platnosti (`"exp": 9999999999`).
 
@@ -120,7 +120,7 @@ def authorize_user(request: Request):
     try:
         # Podpis, expirace i pole tokenu jsou automaticky ověřovány
         decoded = jwt.decode(cookie, SECRET_KEY, algorithms=[ALGORITHM])
-        return decoded.get("user_id")
+        return decoded.get("oid")
     except ExpiredSignatureError:
         print("Platnost tokenu vypršela.")
     except PyJWTError as e:
